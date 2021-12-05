@@ -27,6 +27,12 @@ final class Acronym: Model {
     // @Parent is another special Fluent property wrapper. It tells Fluent that this property represents the parent of a parent-child relationship. Fluent uses this to query the database. @Parent also allows you to create an Acronym using only the ID of a User, without needing a full User object. This helps avoid additional database queries.
     @Parent(key: "userID")
     var user: User
+    
+    @Siblings(
+      through: AcronymCategoryPivot.self,
+      from: \.$acronym,
+      to: \.$category)
+    var categories: [Category]
   
     // 5 - Provide an empty initializer as required by Model. Fluent uses this to initialize models returned from database queries.
     init() {}

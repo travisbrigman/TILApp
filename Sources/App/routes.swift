@@ -13,4 +13,7 @@ func routes(_ app: Application) throws {
     let usersController = UsersController()
     // 2 - Register the new controller instance with the router to hook up the routes.
     try app.register(collection: usersController)
+    
+    let categoriesController = CategoriesController()
+    try app.register(collection: categoriesController)
 }

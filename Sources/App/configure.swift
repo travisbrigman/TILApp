@@ -18,6 +18,8 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateUser())
     // 1 - Add CreateAcronym to the list of migrations to run.
     app.migrations.add(CreateAcronym())
+    app.migrations.add(CreateCategory())
+    app.migrations.add(CreateAcronymCategoryPivot())
       
     // 2 - Set the log level for the application to debug. This provides more information and enables you to see your migrations.
     app.logger.logLevel = .debug

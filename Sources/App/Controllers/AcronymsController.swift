@@ -28,6 +28,12 @@ struct AcronymsController: RouteCollection {
         acronymsRoutes.get("sorted", use: sortedHandler)
         
         acronymsRoutes.get(":acronymID", "user", use: getUserHandler)
+        
+        acronymsRoutes.post(
+          ":acronymID",
+          "categories",
+          ":categoryID",
+          use: addCategoriesHandler)
     }
 
     // 1 - Register a new route handler that accepts a GET request which returns EventLoopFuture<[Acronym]>, a future array of Acronyms.
@@ -117,6 +123,27 @@ struct AcronymsController: RouteCollection {
         .flatMap { acronym in
           // 3 - Use the property wrapper to get the acronym’s owner from the database. This performs a query on the User table to find the user with the ID saved in the database.
           acronym.$user.get(on: req.db)
+        }
+    }
+    
+    // 1 - Define a new route handler, addCategoriesHandler(_:), that returns EventLoopFuture<HTTPStatus>.
+    func addCategoriesHandler(_ req: Request)
+      -> EventLoopFuture<HTTPStatus> {
+      // 2 - Define two properties to query the database and get the acronym and category from the IDs provided to the request. Each property is an EventLoopFuture.
+      let acronymQuery =
+        Acronym.find(req.parameters.get("acronymID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+      let categoryQuery =
+        Category.find(req.parameters.get("categoryID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+      // 3 - Use and(_:) to wait for both futures to return.
+      return acronymQuery.and(categoryQuery)
+        .flatMap { acronym, category in
+          acronym
+            .$categories
+            // 4 - Use attach(_:on:) to set up the relationship between acronym and category.
+            .attach(category, on: req.db)
+            .transform(to: .created)
         }
     }
 }
