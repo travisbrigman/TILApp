@@ -34,6 +34,17 @@ struct AcronymsController: RouteCollection {
           "categories",
           ":categoryID",
           use: addCategoriesHandler)
+        
+        acronymsRoutes.get(
+          ":acronymID",
+          "categories",
+          use: getCategoriesHandler)
+        
+        acronymsRoutes.delete(
+          ":acronymID",
+          "categories",
+          ":categoryID",
+          use: removeCategoriesHandler)
     }
 
     // 1 - Register a new route handler that accepts a GET request which returns EventLoopFuture<[Acronym]>, a future array of Acronyms.
@@ -144,6 +155,39 @@ struct AcronymsController: RouteCollection {
             // 4 - Use attach(_:on:) to set up the relationship between acronym and category.
             .attach(category, on: req.db)
             .transform(to: .created)
+        }
+    }
+    
+    // 1 - Defines route handler getCategoriesHandler(_:) returning EventLoopFuture<[Category]>.
+    func getCategoriesHandler(_ req: Request)
+      -> EventLoopFuture<[Category]> {
+      // 2 - Get the acronym from the database using the provided ID and unwrap the returned future.
+      Acronym.find(req.parameters.get("acronymID"), on: req.db)
+        .unwrap(or: Abort(.notFound))
+        .flatMap { acronym in
+          // 3 - Use the new property wrapper to get the categories. Then use a Fluent query to return all the categories.
+          acronym.$categories.query(on: req.db).all()
+        }
+    }
+    
+    // 1 - Define a new route handler, removeCategoriesHandler(_:), that returns an EventLoopFuture<HTTPStatus>.
+    func removeCategoriesHandler(_ req: Request)
+      -> EventLoopFuture<HTTPStatus> {
+      // 2 - Perform two queries to get the acronym and category from the IDs provided.
+      let acronymQuery =
+        Acronym.find(req.parameters.get("acronymID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+      let categoryQuery =
+        Category.find(req.parameters.get("categoryID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+      // 3 - Use and(_:) to wait for both futures to return.
+      return acronymQuery.and(categoryQuery)
+        .flatMap { acronym, category in
+          // 4 - Use detach(_:on:) to remove the relationship between acronym and category. This finds the pivot model in the database and deletes it. Transform the result into a 204 No Content response.
+          acronym
+            .$categories
+            .detach(category, on: req.db)
+            .transform(to: .noContent)
         }
     }
 }
