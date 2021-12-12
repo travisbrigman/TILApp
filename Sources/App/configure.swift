@@ -1,11 +1,12 @@
 import Fluent
 import FluentPostgresDriver
 import Vapor
+import Leaf
 
 // configures your application
 public func configure(_ app: Application) throws {
     // uncomment to serve files from /Public folder
-    // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
     let databaseName: String
     let databasePort: Int
     // 1
@@ -43,6 +44,7 @@ public func configure(_ app: Application) throws {
 
     // 3 - Automatically run migrations and wait for the result. Fluent allows you to choose when to run your migrations. This is helpful when you need to schedule them, for example. You can use wait() here since you’re not running on an EventLoop.
     try app.autoMigrate().wait()
+    app.views.use(.leaf)
 
     // register routes
     try routes(app)
