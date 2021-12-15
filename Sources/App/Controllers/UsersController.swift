@@ -29,12 +29,13 @@ struct UsersController: RouteCollection {
 
     // 5 - Define the route handler function.
     func createHandler(_ req: Request)
-        throws -> EventLoopFuture<User>
+    throws -> EventLoopFuture<User.Public>
     {
         // 6 - Decode the user from the request body.
         let user = try req.content.decode(User.self)
+        user.password = try Bcrypt.hash(user.password)
         // 7 - Save the decoded user. save(on:) returns EventLoopFuture<Void> so use map(_:) to wait for the save to complete and return the saved user.
-        return user.save(on: req.db).map { user }
+        return user.save(on: req.db).map { user.convertToPublic() }
     }
 
     // 1 - Define a new route handler, getAllHandler(_:), that returns EventLoopFuture<[User]>.

@@ -41,6 +41,15 @@
         <!-- 3 -->
         <select name="categories[]" class="form-control"
          id="categories" placeholder="Categories" multiple="multiple">
+         #if(editing):
+           <!-- 1 -->
+           #for(category in categories):
+             <!-- 2 -->
+             <option value="#(category.name)" selected="selected">
+               #(category.name)
+             </option>
+           #endfor
+         #endif
         </select>
       </div>
 
