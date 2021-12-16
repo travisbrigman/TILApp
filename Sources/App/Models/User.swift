@@ -89,3 +89,16 @@ extension EventLoopFuture where Value == [User] {
         return map { $0.convertToPublic() }
     }
 }
+
+// 1 - Conform User to ModelAuthenticatable. This is a protocol that allows Fluent Models to use HTTP Basic Authentication.
+extension User: ModelAuthenticatable {
+  // 2 - Tell Vapor which key path of User is the username.
+  static let usernameKey = \User.$username
+  // 3 - Tell Vapor which key path of User is the password hash.
+  static let passwordHashKey = \User.$password
+
+  // 4 - Implement verify(password:) as required by ModelAuthenticatable. Since you hash the User’s password using Bcrypt, verify the hash with Bcrypt here.
+  func verify(password: String) throws -> Bool {
+    try Bcrypt.verify(password, created: self.password)
+  }
+}
