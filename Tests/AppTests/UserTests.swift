@@ -31,46 +31,45 @@ final class UserTests: XCTestCase {
 
       try app.test(.GET, usersURI, afterResponse: { response in
         XCTAssertEqual(response.status, .ok)
-        let users = try response.content.decode([User].self)
+          let users = try response.content.decode([User.Public].self)
         
-        XCTAssertEqual(users.count, 2)
-        XCTAssertEqual(users[0].name, usersName)
-        XCTAssertEqual(users[0].username, usersUsername)
-        XCTAssertEqual(users[0].id, user.id)
+          XCTAssertEqual(users.count, 3)
+          XCTAssertEqual(users[1].name, usersName)
+          XCTAssertEqual(users[1].username, usersUsername)
+          XCTAssertEqual(users[1].id, user.id)
       })
     }
     
     func testUserCanBeSavedWithAPI() throws {
-      // 1 - Create a User object with known values.
         let user = User(
           name: usersName,
           username: usersUsername,
           password: "password")
-      
-      // 2 - Use test(_:_:beforeRequest:afterResponse:) to send a POST request to the API
-      try app.test(.POST, usersURI, beforeRequest: { req in
-        // 3 - Encode the request with the created user before you send the request.
-        try req.content.encode(user)
-      }, afterResponse: { response in
-        // 4 - Decode the response body into a User object.
-        let receivedUser = try response.content.decode(User.self)
-        // 5 - Assert the response from the API matches the expected values.
-        XCTAssertEqual(receivedUser.name, usersName)
-        XCTAssertEqual(receivedUser.username, usersUsername)
-        XCTAssertNotNil(receivedUser.id)
-        
-        // 6 - Make another request to get all the users from the API.
-        try app.test(.GET, usersURI,
-          afterResponse: { secondResponse in
-            // 7 - Ensure the response only contains the user you created in the first request.
-            let users =
-              try secondResponse.content.decode([User].self)
-            XCTAssertEqual(users.count, 1)
-            XCTAssertEqual(users[0].name, usersName)
-            XCTAssertEqual(users[0].username, usersUsername)
-            XCTAssertEqual(users[0].id, receivedUser.id)
-          })
-      })
+
+        // 1 - Set loggedInRequest so the create user request works.
+        try app.test(.POST, usersURI, loggedInRequest: true,
+          beforeRequest: { req in
+            try req.content.encode(user)
+        }, afterResponse: { response in
+          // 2 - Decode the response to User.Public.
+          let receivedUser =
+            try response.content.decode(User.Public.self)
+          XCTAssertEqual(receivedUser.name, usersName)
+          XCTAssertEqual(receivedUser.username, usersUsername)
+          XCTAssertNotNil(receivedUser.id)
+
+          try app.test(.GET, usersURI,
+            afterResponse: { secondResponse in
+              // 3 - Decode the second response to an array of User.Public.
+              let users =
+                try secondResponse.content.decode([User.Public].self)
+              // 4 - Update the assertions to take account of the admin user.
+              XCTAssertEqual(users.count, 2)
+              XCTAssertEqual(users[1].name, usersName)
+              XCTAssertEqual(users[1].username, usersUsername)
+              XCTAssertEqual(users[1].id, receivedUser.id)
+            })
+        })
     }
     
     func testGettingASingleUserFromTheAPI() throws {
@@ -79,11 +78,12 @@ final class UserTests: XCTestCase {
         name: usersName,
         username: usersUsername,
         on: app.db)
+        
       
       // 2 - Get the user at /api/users/<USER ID>.
       try app.test(.GET, "\(usersURI)\(user.id!)",
         afterResponse: { response in
-          let receivedUser = try response.content.decode(User.self)
+          let receivedUser = try response.content.decode(User.Public.self)
           // 3 - Assert the values are the same as provided when creating the user.
           XCTAssertEqual(receivedUser.name, usersName)
           XCTAssertEqual(receivedUser.username, usersUsername)
