@@ -36,6 +36,13 @@ struct WebsiteController: RouteCollection {
         routes.post(
             "acronyms", ":acronymID", "delete",
             use: deleteAcronymHandler)
+        // 1 - Route GET requests for /login to loginHandler(_:).
+        routes.get("login", use: loginHandler)
+        // 2 - Create a route group using ModelCredentialsAuthenticator. This middleware checks the request for the submitted form. It then verifies the credentials and authenticates the request if successful.
+        let credentialsAuthRoutes =
+          routes.grouped(User.credentialsAuthenticator())
+        // 3 - Route POST requests for /login to loginPostHandler(_:userData:) via credentialsAuthRoutes.
+        credentialsAuthRoutes.post("login", use: loginPostHandler)
     }
 
     // 4 - Implement indexHandler(_:) that returns EventLoopFuture<View>.
@@ -286,6 +293,38 @@ struct WebsiteController: RouteCollection {
                     .transform(to: req.redirect(to: "/"))
             }
     }
+    
+    // 1 - Define a route handler for the login page that returns a future View.
+    func loginHandler(_ req: Request)
+      -> EventLoopFuture<View> {
+        let context: LoginContext
+        // 2 - If the request contains the error parameter and it’s true, create a context with loginError set to true.
+        if let error = req.query[Bool.self, at: "error"], error {
+          context = LoginContext(loginError: true)
+        } else {
+          context = LoginContext()
+        }
+        // 3 - Render the login.leaf template, passing in the context.
+        return req.view.render("login", context)
+    }
+    
+    // 1 - Define a route handler that returns EventLoopFuture<Response>.
+    func loginPostHandler(
+      _ req: Request
+    ) -> EventLoopFuture<Response> {
+      // 2 - Verify that the request has an authenticated User. You use middleware to perform the authentication.
+      if req.auth.has(User.self) {
+        // 3 - Redirect to the home page after the login succeeds.
+        return req.eventLoop.future(req.redirect(to: "/"))
+      } else {
+        // 4 - If the login failed, redirect back to the login page to show an error.
+        let context = LoginContext(loginError: true)
+        return req
+          .view
+          .render("login", context)
+          .encodeResponse(for: req)
+      }
+    }
 }
 
 struct IndexContext: Encodable {
@@ -349,4 +388,13 @@ struct CreateAcronymFormData: Content {
     let short: String
     let long: String
     let categories: [String]?
+}
+
+struct LoginContext: Encodable {
+  let title = "Log In"
+  let loginError: Bool
+
+  init(loginError: Bool = false) {
+    self.loginError = loginError
+  }
 }

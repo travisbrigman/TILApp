@@ -102,3 +102,9 @@ extension User: ModelAuthenticatable {
     try Bcrypt.verify(password, created: self.password)
   }
 }
+
+
+// 1 - Conform User to ModelSessionAuthenticatable. This allows the application to save and retrieve your user as part of a session.
+extension User: ModelSessionAuthenticatable {}
+// 2 Conform User to ModelCredentialsAuthenticatable. This allows Vapor to authenticate users with a username and password when they log in. Since you’ve already implemented the necessary properties and function for ModelCredentialsAuthenticatable in ModelAuthenticatable, there’s nothing to do here.
+extension User: ModelCredentialsAuthenticatable {}
