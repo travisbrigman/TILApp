@@ -13,36 +13,49 @@ import Vapor
 struct WebsiteController: RouteCollection {
     // 2 - Implement boot(routes:) as required by RouteCollection.
     func boot(routes: RoutesBuilder) throws {
-        // 3 - Register indexHandler(_:) to process GET requests to the router’s root path, i.e., a request to /.
-        routes.get(use: indexHandler)
-        routes.get("acronyms", ":acronymID", use: acronymHandler)
-        routes.get("users", ":userID", use: userHandler)
-        routes.get("users", use: allUsersHandler)
-        // 1
-        routes.get("categories", use: allCategoriesHandler)
-        // 2
-        routes.get("categories", ":categoryID", use: categoryHandler)
-
-        // 1
-        routes.get("acronyms", "create", use: createAcronymHandler)
-        // 2
-        routes.post("acronyms", "create", use: createAcronymPostHandler)
-        routes.get(
-            "acronyms", ":acronymID", "edit",
-            use: editAcronymHandler)
-        routes.post(
-            "acronyms", ":acronymID", "edit",
-            use: editAcronymPostHandler)
-        routes.post(
-            "acronyms", ":acronymID", "delete",
-            use: deleteAcronymHandler)
-        // 1 - Route GET requests for /login to loginHandler(_:).
-        routes.get("login", use: loginHandler)
-        // 2 - Create a route group using ModelCredentialsAuthenticator. This middleware checks the request for the submitted form. It then verifies the credentials and authenticates the request if successful.
+        let authSessionsRoutes =
+            routes.grouped(User.sessionAuthenticator())
+        authSessionsRoutes.get("login", use: loginHandler)
         let credentialsAuthRoutes =
-          routes.grouped(User.credentialsAuthenticator())
-        // 3 - Route POST requests for /login to loginPostHandler(_:userData:) via credentialsAuthRoutes.
+            authSessionsRoutes.grouped(User.credentialsAuthenticator())
         credentialsAuthRoutes.post("login", use: loginPostHandler)
+        authSessionsRoutes.get(use: indexHandler)
+        authSessionsRoutes.get(
+            "acronyms",
+            ":acronymID",
+            use: acronymHandler)
+        authSessionsRoutes.get("users", ":userID", use: userHandler)
+        authSessionsRoutes.get("users", use: allUsersHandler)
+        authSessionsRoutes.get("categories", use: allCategoriesHandler)
+        authSessionsRoutes.get(
+            "categories",
+            ":categoryID",
+            use: categoryHandler)
+        let protectedRoutes = authSessionsRoutes
+            .grouped(User.redirectMiddleware(path: "/login"))
+        protectedRoutes.get(
+            "acronyms",
+            "create",
+            use: createAcronymHandler)
+        protectedRoutes.post(
+            "acronyms",
+            "create",
+            use: createAcronymPostHandler)
+        protectedRoutes.get(
+            "acronyms",
+            ":acronymID",
+            "edit",
+            use: editAcronymHandler)
+        protectedRoutes.post(
+            "acronyms",
+            ":acronymID",
+            "edit",
+            use: editAcronymPostHandler)
+        protectedRoutes.post(
+            "acronyms",
+            ":acronymID",
+            "delete",
+            use: deleteAcronymHandler)
     }
 
     // 4 - Implement indexHandler(_:) that returns EventLoopFuture<View>.
@@ -156,8 +169,7 @@ struct WebsiteController: RouteCollection {
         // 1 - Get all the users from the database.
         User.query(on: req.db).all().flatMap { users in
             // 2 - Create a context for the template.
-            let context = CreateAcronymContext(users: users)
-            // 3 - Render the page using the createAcronym.leaf template.
+            let context = CreateAcronymContext()
             return req.view.render("createAcronym", context)
         }
     }
@@ -167,10 +179,11 @@ struct WebsiteController: RouteCollection {
     {
         // 1 - Change Content type to decode CreateAcronymFormData.
         let data = try req.content.decode(CreateAcronymFormData.self)
-        let acronym = Acronym(
-            short: data.short,
-            long: data.long,
-            userID: data.userID)
+        let user = try req.auth.require(User.self)
+        let acronym = try Acronym(
+          short: data.short,
+          long: data.long,
+          userID: user.requireID())
         // 2 - Use flatMap(_:) instead of map(:_) as you now return an EventLoopFuture in the closure.
         return acronym.save(on: req.db).flatMap {
             guard let id = acronym.id else {
@@ -196,91 +209,88 @@ struct WebsiteController: RouteCollection {
     }
 
     func editAcronymHandler(_ req: Request)
-        -> EventLoopFuture<View>
-    {
-        // 1 - Create a future to get the acronym to edit from the request’s parameters.
-        let acronymFuture = Acronym
-            .find(req.parameters.get("acronymID"), on: req.db)
-            .unwrap(or: Abort(.notFound))
-        // 2 - Create a future to get all the users from the DB.
-        let userQuery = User.query(on: req.db).all()
-        // 3 - Use .and(_:) to chain the futures together and flatMap(_:) to wait for both futures to complete.
-        return acronymFuture.and(userQuery)
-            .flatMap { acronym, users in
-                acronym.$categories.get(on: req.db).flatMap { categories in
-                  let context = EditAcronymContext(
-                    acronym: acronym,
-                    users: users,
-                    categories: categories)
-                  return req.view.render("createAcronym", context)
-                }
-            }
+      -> EventLoopFuture<View> {
+      return Acronym
+        .find(req.parameters.get("acronymID"), on: req.db)
+        .unwrap(or: Abort(.notFound))
+        .flatMap { acronym in
+          acronym.$categories.get(on: req.db)
+            .flatMap { categories in
+              let context = EditAcronymContext(
+                acronym: acronym,
+                categories: categories)
+              return req.view.render("createAcronym", context)
+          }
+      }
     }
 
     func editAcronymPostHandler(_ req: Request) throws
-      -> EventLoopFuture<Response> {
-      // 1 - Change the content type the request decodes to CreateAcronymFormData.
-      let updateData =
-        try req.content.decode(CreateAcronymFormData.self)
-      return Acronym
-        .find(req.parameters.get("acronymID"), on: req.db)
-        .unwrap(or: Abort(.notFound)).flatMap { acronym in
-          acronym.short = updateData.short
-          acronym.long = updateData.long
-          acronym.$user.id = updateData.userID
-          guard let id = acronym.id else {
-            return req.eventLoop
-              .future(error: Abort(.internalServerError))
-          }
-          // 2 - Use flatMap(_:) on save(on:) but return all the acronym’s categories. Note the chaining of futures instead of nesting them. This helps improve the readability of your code.
-          return acronym.save(on: req.db).flatMap {
-            // 3 - Get all categories from the database.
-            acronym.$categories.get(on: req.db)
-          }.flatMap { existingCategories in
-            // 4 - Create an array of category names from the categories in the database.
-            let existingStringArray = existingCategories.map {
-              $0.name
+        -> EventLoopFuture<Response>
+    {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        // 1 - Change the content type the request decodes to CreateAcronymFormData.
+        let updateData =
+            try req.content.decode(CreateAcronymFormData.self)
+        return Acronym
+            .find(req.parameters.get("acronymID"), on: req.db)
+            .unwrap(or: Abort(.notFound)).flatMap { acronym in
+                acronym.short = updateData.short
+                acronym.long = updateData.long
+                acronym.$user.id = userID
+                guard let id = acronym.id else {
+                    return req.eventLoop
+                        .future(error: Abort(.internalServerError))
+                }
+                // 2 - Use flatMap(_:) on save(on:) but return all the acronym’s categories. Note the chaining of futures instead of nesting them. This helps improve the readability of your code.
+                return acronym.save(on: req.db).flatMap {
+                    // 3 - Get all categories from the database.
+                    acronym.$categories.get(on: req.db)
+                }.flatMap { existingCategories in
+                    // 4 - Create an array of category names from the categories in the database.
+                    let existingStringArray = existingCategories.map {
+                        $0.name
+                    }
+
+                    // 5 - Create a Set for the categories in the database and another for the categories supplied with the request.
+                    let existingSet = Set<String>(existingStringArray)
+                    let newSet = Set<String>(updateData.categories ?? [])
+
+                    // 6 - Calculate the categories to add to the acronym and the categories to remove.
+                    let categoriesToAdd = newSet.subtracting(existingSet)
+                    let categoriesToRemove = existingSet
+                        .subtracting(newSet)
+
+                    // 7 - Create an array of category operation results.
+                    var categoryResults: [EventLoopFuture<Void>] = []
+                    // 8 - Loop through all the categories to add and call Category.addCategory(_:to:on:) to set up the relationship. Add each result to the results array.
+                    for newCategory in categoriesToAdd {
+                        categoryResults.append(
+                            Category.addCategory(
+                                newCategory,
+                                to: acronym,
+                                on: req))
+                    }
+
+                    // 9 - Loop through all the category names to remove from the acronym.
+                    for categoryNameToRemove in categoriesToRemove {
+                        // 10 - Get the Category object from the name of the category to remove.
+                        let categoryToRemove = existingCategories.first {
+                            $0.name == categoryNameToRemove
+                        }
+                        // 11 - If the Category object exists, use detach(_:on:) to remove the relationship and delete the pivot.
+                        if let category = categoryToRemove {
+                            categoryResults.append(
+                                acronym.$categories.detach(category, on: req.db))
+                        }
+                    }
+
+                    let redirect = req.redirect(to: "/acronyms/\(id)")
+                    // 12 - Flatten all the future category results. Transform the result to redirect to the updated acronym’s page.
+                    return categoryResults.flatten(on: req.eventLoop)
+                        .transform(to: redirect)
+                }
             }
-
-            // 5 - Create a Set for the categories in the database and another for the categories supplied with the request.
-            let existingSet = Set<String>(existingStringArray)
-            let newSet = Set<String>(updateData.categories ?? [])
-
-            // 6 - Calculate the categories to add to the acronym and the categories to remove.
-            let categoriesToAdd = newSet.subtracting(existingSet)
-            let categoriesToRemove = existingSet
-              .subtracting(newSet)
-
-            // 7 - Create an array of category operation results.
-            var categoryResults: [EventLoopFuture<Void>] = []
-            // 8 - Loop through all the categories to add and call Category.addCategory(_:to:on:) to set up the relationship. Add each result to the results array.
-            for newCategory in categoriesToAdd {
-              categoryResults.append(
-                Category.addCategory(
-                  newCategory,
-                  to: acronym,
-                  on: req))
-            }
-
-            // 9 - Loop through all the category names to remove from the acronym.
-            for categoryNameToRemove in categoriesToRemove {
-              // 10 - Get the Category object from the name of the category to remove.
-              let categoryToRemove = existingCategories.first {
-                $0.name == categoryNameToRemove
-              }
-              // 11 - If the Category object exists, use detach(_:on:) to remove the relationship and delete the pivot.
-              if let category = categoryToRemove {
-                categoryResults.append(
-                  acronym.$categories.detach(category, on: req.db))
-              }
-            }
-
-            let redirect = req.redirect(to: "/acronyms/\(id)")
-            // 12 - Flatten all the future category results. Transform the result to redirect to the updated acronym’s page.
-            return categoryResults.flatten(on: req.eventLoop)
-              .transform(to: redirect)
-          }
-      }
     }
 
     func deleteAcronymHandler(_ req: Request)
@@ -293,37 +303,38 @@ struct WebsiteController: RouteCollection {
                     .transform(to: req.redirect(to: "/"))
             }
     }
-    
+
     // 1 - Define a route handler for the login page that returns a future View.
     func loginHandler(_ req: Request)
-      -> EventLoopFuture<View> {
+        -> EventLoopFuture<View>
+    {
         let context: LoginContext
         // 2 - If the request contains the error parameter and it’s true, create a context with loginError set to true.
         if let error = req.query[Bool.self, at: "error"], error {
-          context = LoginContext(loginError: true)
+            context = LoginContext(loginError: true)
         } else {
-          context = LoginContext()
+            context = LoginContext()
         }
         // 3 - Render the login.leaf template, passing in the context.
         return req.view.render("login", context)
     }
-    
+
     // 1 - Define a route handler that returns EventLoopFuture<Response>.
     func loginPostHandler(
-      _ req: Request
+        _ req: Request
     ) -> EventLoopFuture<Response> {
-      // 2 - Verify that the request has an authenticated User. You use middleware to perform the authentication.
-      if req.auth.has(User.self) {
-        // 3 - Redirect to the home page after the login succeeds.
-        return req.eventLoop.future(req.redirect(to: "/"))
-      } else {
-        // 4 - If the login failed, redirect back to the login page to show an error.
-        let context = LoginContext(loginError: true)
-        return req
-          .view
-          .render("login", context)
-          .encodeResponse(for: req)
-      }
+        // 2 - Verify that the request has an authenticated User. You use middleware to perform the authentication.
+        if req.auth.has(User.self) {
+            // 3 - Redirect to the home page after the login succeeds.
+            return req.eventLoop.future(req.redirect(to: "/"))
+        } else {
+            // 4 - If the login failed, redirect back to the login page to show an error.
+            let context = LoginContext(loginError: true)
+            return req
+                .view
+                .render("login", context)
+                .encodeResponse(for: req)
+        }
     }
 }
 
@@ -368,7 +379,6 @@ struct CategoryContext: Encodable {
 
 struct CreateAcronymContext: Encodable {
     let title = "Create An Acronym"
-    let users: [User]
 }
 
 struct EditAcronymContext: Encodable {
@@ -376,25 +386,22 @@ struct EditAcronymContext: Encodable {
     let title = "Edit Acronym"
     // 2 - The acronym to edit.
     let acronym: Acronym
-    // 3 - An array of users to display in the form.
-    let users: [User]
     // 4 - A flag to tell the template that the page is for editing an acronym.
     let editing = true
     let categories: [Category]
 }
 
 struct CreateAcronymFormData: Content {
-    let userID: UUID
     let short: String
     let long: String
     let categories: [String]?
 }
 
 struct LoginContext: Encodable {
-  let title = "Log In"
-  let loginError: Bool
+    let title = "Log In"
+    let loginError: Bool
 
-  init(loginError: Bool = false) {
-    self.loginError = loginError
-  }
+    init(loginError: Bool = false) {
+        self.loginError = loginError
+    }
 }

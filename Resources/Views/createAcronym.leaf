@@ -20,20 +20,6 @@
          id="long" #if(editing): value="#(acronym.long)" #endif/>
       </div>
 
-      <div class="form-group">
-        <label for="userID">User</label>
-        <!-- 5 -->
-        <select name="userID" class="form-control" id="userID">
-          <!-- 6 -->
-          #for(user in users):
-          <option value="#(user.id)"
-           #if(editing): #if(acronym.user.id == user.id):
-             selected #endif #endif>
-            #(user.name)
-          </option>
-          #endfor
-        </select>
-      </div>
       <!-- 1 -->
       <div class="form-group">
         <!-- 2 -->
