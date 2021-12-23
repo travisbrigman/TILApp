@@ -19,6 +19,7 @@ struct WebsiteController: RouteCollection {
         let credentialsAuthRoutes =
             authSessionsRoutes.grouped(User.credentialsAuthenticator())
         credentialsAuthRoutes.post("login", use: loginPostHandler)
+        authSessionsRoutes.post("logout", use: logoutHandler)
         authSessionsRoutes.get(use: indexHandler)
         authSessionsRoutes.get(
             "acronyms",
@@ -65,9 +66,13 @@ struct WebsiteController: RouteCollection {
         // 1 - Use a Fluent query to get all the acronyms from the database.
         Acronym.query(on: req.db).all().flatMap { acronyms in
             // 2 - Add the acronyms to IndexContext if there are any, otherwise set the property to nil. Leaf can check for nil in the template.
+            // 1 - Check if the request contains an authenticated user.
+            let userLoggedIn = req.auth.has(User.self)
+            // 2 - Pass the result to the new flag in IndexContext.
             let context = IndexContext(
-                title: "Home page",
-                acronyms: acronyms)
+              title: "Home page",
+              acronyms: acronyms,
+              userLoggedIn: userLoggedIn)
             return req.view.render("index", context)
         }
     }
@@ -336,11 +341,20 @@ struct WebsiteController: RouteCollection {
                 .encodeResponse(for: req)
         }
     }
+    
+    // 1 - Define a route handler that simply returns Response. There’s no asynchronous work in this method, so it doesn’t need to return a future.
+    func logoutHandler(_ req: Request) -> Response {
+      // 2 - Call logout(_:) on the request. This deletes the user from the session so it can’t be used to authenticate future requests.
+      req.auth.logout(User.self)
+      // 3 - Return a redirect to the index page.
+      return req.redirect(to: "/")
+    }
 }
 
 struct IndexContext: Encodable {
     let title: String
     let acronyms: [Acronym]
+    let userLoggedIn: Bool
 }
 
 struct AcronymContext: Encodable {

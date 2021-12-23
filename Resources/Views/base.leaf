@@ -54,6 +54,15 @@
             </a>
           </li>
         </ul>
+        <!-- 1 -->
+        #if(userLoggedIn):
+          <!-- 2 -->
+          <form class="form-inline" action="/logout" method="POST">
+            <!-- 3 -->
+            <input class="nav-link btn btn-secondary mr-sm-2"
+             type="submit" value="Log out">
+          </form>
+        #endif
       </div>
     </nav>
     <div class="container mt-3">
