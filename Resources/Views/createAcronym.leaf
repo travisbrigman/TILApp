@@ -6,6 +6,9 @@
 
     <!-- 2 -->
     <form method="post">
+        #if(csrfToken):
+          <input type="hidden" name="csrfToken" value="#(csrfToken)">
+        #endif
       <!-- 3 -->
       <div class="form-group">
         <label for="short">Acronym</label>

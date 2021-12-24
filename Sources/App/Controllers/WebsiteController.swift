@@ -69,10 +69,15 @@ struct WebsiteController: RouteCollection {
             // 1 - Check if the request contains an authenticated user.
             let userLoggedIn = req.auth.has(User.self)
             // 2 - Pass the result to the new flag in IndexContext.
+            // 1 - See if a cookie called cookies-accepted exists. If it doesn’t, set the showCookieMessage flag to true. You can read cookies from the request and set them on a response.
+            let showCookieMessage =
+              req.cookies["cookies-accepted"] == nil
+            // 2 - Pass the flag to IndexContext so the template knows whether to show the message.
             let context = IndexContext(
               title: "Home page",
               acronyms: acronyms,
-              userLoggedIn: userLoggedIn)
+              userLoggedIn: userLoggedIn,
+              showCookieMessage: showCookieMessage)
             return req.view.render("index", context)
         }
     }
@@ -174,7 +179,12 @@ struct WebsiteController: RouteCollection {
         // 1 - Get all the users from the database.
         User.query(on: req.db).all().flatMap { users in
             // 2 - Create a context for the template.
-            let context = CreateAcronymContext()
+                // 1 - Create a token using 16 bytes of randomly generated data, Base64 encoded.
+            let token = [UInt8].random(count: 16).base64
+                // 2 - Initialize a CreateAcronymContext with the created token.
+            let context = CreateAcronymContext(csrfToken: token)
+                // 3 - Save the token into the request’s session data under the CSRF_TOKEN key.
+            req.session.data["CSRF_TOKEN"] = token
             return req.view.render("createAcronym", context)
         }
     }
@@ -355,6 +365,7 @@ struct IndexContext: Encodable {
     let title: String
     let acronyms: [Acronym]
     let userLoggedIn: Bool
+    let showCookieMessage: Bool
 }
 
 struct AcronymContext: Encodable {
@@ -393,6 +404,7 @@ struct CategoryContext: Encodable {
 
 struct CreateAcronymContext: Encodable {
     let title = "Create An Acronym"
+    let csrfToken: String
 }
 
 struct EditAcronymContext: Encodable {
@@ -409,6 +421,7 @@ struct CreateAcronymFormData: Content {
     let short: String
     let long: String
     let categories: [String]?
+    let csrfToken: String?
 }
 
 struct LoginContext: Encodable {
