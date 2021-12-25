@@ -57,6 +57,10 @@ struct WebsiteController: RouteCollection {
             ":acronymID",
             "delete",
             use: deleteAcronymHandler)
+        // 1 - Connect a GET request for /register to registerHandler(_:).
+        authSessionsRoutes.get("register", use: registerHandler)
+        // 2 - Connect a POST request for /register to registerPostHandler(_:data:).
+        authSessionsRoutes.post("register", use: registerPostHandler)
     }
 
     // 4 - Implement indexHandler(_:) that returns EventLoopFuture<View>.
@@ -71,13 +75,13 @@ struct WebsiteController: RouteCollection {
             // 2 - Pass the result to the new flag in IndexContext.
             // 1 - See if a cookie called cookies-accepted exists. If it doesn’t, set the showCookieMessage flag to true. You can read cookies from the request and set them on a response.
             let showCookieMessage =
-              req.cookies["cookies-accepted"] == nil
+                req.cookies["cookies-accepted"] == nil
             // 2 - Pass the flag to IndexContext so the template knows whether to show the message.
             let context = IndexContext(
-              title: "Home page",
-              acronyms: acronyms,
-              userLoggedIn: userLoggedIn,
-              showCookieMessage: showCookieMessage)
+                title: "Home page",
+                acronyms: acronyms,
+                userLoggedIn: userLoggedIn,
+                showCookieMessage: showCookieMessage)
             return req.view.render("index", context)
         }
     }
@@ -177,13 +181,13 @@ struct WebsiteController: RouteCollection {
         -> EventLoopFuture<View>
     {
         // 1 - Get all the users from the database.
-        User.query(on: req.db).all().flatMap { users in
+        User.query(on: req.db).all().flatMap { _ in
             // 2 - Create a context for the template.
-                // 1 - Create a token using 16 bytes of randomly generated data, Base64 encoded.
+            // 1 - Create a token using 16 bytes of randomly generated data, Base64 encoded.
             let token = [UInt8].random(count: 16).base64
-                // 2 - Initialize a CreateAcronymContext with the created token.
+            // 2 - Initialize a CreateAcronymContext with the created token.
             let context = CreateAcronymContext(csrfToken: token)
-                // 3 - Save the token into the request’s session data under the CSRF_TOKEN key.
+            // 3 - Save the token into the request’s session data under the CSRF_TOKEN key.
             req.session.data["CSRF_TOKEN"] = token
             return req.view.render("createAcronym", context)
         }
@@ -196,9 +200,20 @@ struct WebsiteController: RouteCollection {
         let data = try req.content.decode(CreateAcronymFormData.self)
         let user = try req.auth.require(User.self)
         let acronym = try Acronym(
-          short: data.short,
-          long: data.long,
-          userID: user.requireID())
+            short: data.short,
+            long: data.long,
+            userID: user.requireID())
+        // 1 - Get the expected token from the request’s session data. This is the token you saved in createAcronymHandler(_:).
+        let expectedToken = req.session.data["CSRF_TOKEN"]
+        // 2 - Clear the CSRF token now that you’ve used it. You generate a new token with each form.
+        req.session.data["CSRF_TOKEN"] = nil
+        // 3 - Ensure the provided token is not nil and matches the expected token; otherwise, throw a 400 Bad Request error.
+        guard
+            let csrfToken = data.csrfToken,
+            expectedToken == csrfToken
+        else {
+            throw Abort(.badRequest)
+        }
         // 2 - Use flatMap(_:) instead of map(:_) as you now return an EventLoopFuture in the closure.
         return acronym.save(on: req.db).flatMap {
             guard let id = acronym.id else {
@@ -224,19 +239,20 @@ struct WebsiteController: RouteCollection {
     }
 
     func editAcronymHandler(_ req: Request)
-      -> EventLoopFuture<View> {
-      return Acronym
-        .find(req.parameters.get("acronymID"), on: req.db)
-        .unwrap(or: Abort(.notFound))
-        .flatMap { acronym in
-          acronym.$categories.get(on: req.db)
-            .flatMap { categories in
-              let context = EditAcronymContext(
-                acronym: acronym,
-                categories: categories)
-              return req.view.render("createAcronym", context)
-          }
-      }
+        -> EventLoopFuture<View>
+    {
+        return Acronym
+            .find(req.parameters.get("acronymID"), on: req.db)
+            .unwrap(or: Abort(.notFound))
+            .flatMap { acronym in
+                acronym.$categories.get(on: req.db)
+                    .flatMap { categories in
+                        let context = EditAcronymContext(
+                            acronym: acronym,
+                            categories: categories)
+                        return req.view.render("createAcronym", context)
+                    }
+            }
     }
 
     func editAcronymPostHandler(_ req: Request) throws
@@ -351,13 +367,57 @@ struct WebsiteController: RouteCollection {
                 .encodeResponse(for: req)
         }
     }
-    
+
     // 1 - Define a route handler that simply returns Response. There’s no asynchronous work in this method, so it doesn’t need to return a future.
     func logoutHandler(_ req: Request) -> Response {
-      // 2 - Call logout(_:) on the request. This deletes the user from the session so it can’t be used to authenticate future requests.
-      req.auth.logout(User.self)
-      // 3 - Return a redirect to the index page.
-      return req.redirect(to: "/")
+        // 2 - Call logout(_:) on the request. This deletes the user from the session so it can’t be used to authenticate future requests.
+        req.auth.logout(User.self)
+        // 3 - Return a redirect to the index page.
+        return req.redirect(to: "/")
+    }
+
+    func registerHandler(_ req: Request) -> EventLoopFuture<View> {
+        let context: RegisterContext
+        if let message = req.query[String.self, at: "message"] {
+          context = RegisterContext(message: message)
+        } else {
+          context = RegisterContext()
+        }
+        return req.view.render("register", context)
+    }
+
+    // 1 - Define a route handler that accepts a request and returns EventLoopFuture<Response>.
+    func registerPostHandler(
+        _ req: Request
+    ) throws -> EventLoopFuture<Response> {
+        do {
+            try RegisterData.validate(content: req)
+        } catch let error as ValidationsError {
+            let message =
+              error.description
+              .addingPercentEncoding(
+                withAllowedCharacters: .urlQueryAllowed
+              ) ?? "Unknown error"
+            let redirect =
+              req.redirect(to: "/register?message=\(message)")
+            return req.eventLoop.future(redirect)
+          }
+        // 2 - Decode the request body to RegisterData.
+        let data = try req.content.decode(RegisterData.self)
+        // 3 - Hash the password submitted to the form.
+        let password = try Bcrypt.hash(data.password)
+        // 4 - Create a new User, using the data from the form and the hashed password.
+        let user = User(
+            name: data.name,
+            username: data.username,
+            password: password)
+        // 5 - Save the new user and unwrap the returned future.
+        return user.save(on: req.db).map {
+            // 6 - Authenticate the session for the new user. This automatically logs users in when they register, thereby providing a nice user experience when signing up with the site.
+            req.auth.login(user)
+            // 7 - Return a redirect back to the home page.
+            return req.redirect(to: "/")
+        }
     }
 }
 
@@ -430,5 +490,101 @@ struct LoginContext: Encodable {
 
     init(loginError: Bool = false) {
         self.loginError = loginError
+    }
+}
+
+struct RegisterContext: Encodable {
+    let title = "Register"
+    let message: String?
+
+    init(message: String? = nil) {
+      self.message = message
+    }
+}
+
+struct RegisterData: Content {
+    let name: String
+    let username: String
+    let password: String
+    let confirmPassword: String
+}
+
+// 1 - Extend RegisterData to make it conform to Validatable. Validatable allows you to validate types with Vapor.
+extension RegisterData: Validatable {
+    // 2 - Implement validations(_:) as required by Validatable.
+    public static func validations(
+        _ validations: inout Validations
+    ) {
+        // 3 - Add a validator to ensure RegisterData’s name contains only ASCII characters and is a String. Note: Be careful when adding restrictions on names like this. Some countries, such as China, don’t have names with ASCII characters.
+        validations.add("name", as: String.self, is: .ascii)
+        // 4 - Add a validator to ensure the username contains only alphanumeric characters and is at least 3 characters long. .count(_:) takes a Swift Range, allowing you to create both open-ended and closed ranges, as necessary.
+        validations.add(
+            "username",
+            as: String.self,
+            is: .alphanumeric && .count(3...))
+        // 5 - Add a validator to ensure the password is at least eight characters long. Currently, it’s not possible to add a validation to two different properties. You must provide your own check that password and confirmPassword match.
+        validations.add(
+            "password",
+            as: String.self,
+            is: .count(8...))
+        validations.add(
+            "zipCode",
+            as: String.self,
+            is: .zipCode,
+            required: false)
+    }
+}
+
+// 1 - Create an extension for ValidatorResults to add your own results.
+extension ValidatorResults {
+    // 2 - Create a ZipCode result that contains the result check.
+    struct ZipCode {
+        let isValidZipCode: Bool
+    }
+}
+
+// 3 - Create an extension for the new ZipCode type that conforms to ValidatorResult.
+extension ValidatorResults.ZipCode: ValidatorResult {
+    // 4 - Implement isFailure as required by ValidatorResult. Define what counts as a failure.
+    var isFailure: Bool {
+        !isValidZipCode
+    }
+
+    // 5 - Implement successDescription as required by ValidatorResult.
+    var successDescription: String? {
+        "is a valid zip code"
+    }
+
+    // 6 - Implement failureDescription as required by ValidatorResult. Vapor uses this when throwing an error when isFailure is true.
+    var failureDescription: String? {
+        "is not a valid zip code"
+    }
+}
+
+// 1 - Create an extension for Validator that works on Strings.
+extension Validator where T == String {
+    // 2 - Define the regular expression to use to check for a valid US zip code.
+    private static var zipCodeRegex: String {
+        "^\\d{5}(?:[-\\s]\\d{4})?$"
+    }
+
+    // 3 - Define a new validator type for a zip code.
+    public static var zipCode: Validator<T> {
+        // 4 - Construct a new Validator. This takes a closure which has the data to validate as the parameter and returns ValidatorResult.
+        Validator { input -> ValidatorResult in
+            // 5 - Check the zip code matches the regular expression.
+            guard
+                let range = input.range(
+                    of: zipCodeRegex,
+                    options: [.regularExpression]),
+                range.lowerBound == input.startIndex,
+                range.upperBound == input.endIndex
+            else {
+                // 6 - If the zip code does not match, return ValidatorResult with isValidZipCode set to false.
+                return ValidatorResults.ZipCode(isValidZipCode: false)
+            }
+            // 7 - Otherwise, return a successful ValidatorResult.
+            return ValidatorResults.ZipCode(isValidZipCode: true)
+        }
     }
 }
