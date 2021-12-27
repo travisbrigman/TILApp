@@ -13,8 +13,70 @@ struct ImperialController: RouteCollection {
   func boot(routes: RoutesBuilder) throws {
       func processGoogleLogin(request: Request, token: String)
         throws -> EventLoopFuture<ResponseEncodable> {
-          request.eventLoop.future(request.redirect(to: "/"))
+            // 1 - Get the user information from Google.
+            try Google
+              .getUser(on: request)
+              .flatMap { userInfo in
+                // 2 - See if the user exists in the database by looking up the email as the username.
+                User
+                  .query(on: request.db)
+                  .filter(\.$username == userInfo.email)
+                  .first()
+                  .flatMap { foundUser in
+                    guard let existingUser = foundUser else {
+                      // 3 - If the user doesn’t exist, create a new User using the name and email from the user information from Google. Set the password to a UUID string, since you don’t need it. This ensures that no one can login to this account via a normal password login.
+                      let user = User(
+                        name: userInfo.name,
+                        username: userInfo.email,
+                        password: UUID().uuidString)
+                      // 4 - Save the user and unwrap the returned future.
+                        return user.save(on: request.db).flatMap {
+                          request.session.authenticate(user)
+                          return generateRedirect(on: request, for: user)
+                        }
+                    }
+                    // 6 - If the user already exists, authenticate the user in the session and redirect to the home page.
+                    request.session.authenticate(existingUser)
+                      return generateRedirect(on: request, for: existingUser)
+                  }
+              }
         }
+      
+      func iOSGoogleLogin(_ req: Request) -> Response {
+        // 1 - Add an entry to the request’s session, noting that this OAuth login attempt came from iOS.
+        req.session.data["oauth_login"] = "iOS"
+        // 2 - Redirect to the URL you created earlier to start the OAuth flow for logging in to the website using Google.
+        return req.redirect(to: "/login-google")
+      }
+      
+      // 1 - Define a new method that takes both Request and User to generate a redirect. This new method returns EventLoopFuture<ResponseEncodable>.
+      func generateRedirect(on req: Request, for user: User)
+        -> EventLoopFuture<ResponseEncodable> {
+          let redirectURL: EventLoopFuture<String>
+          // 2 - Check the request’s session data for the oauth_login flag to see if it matches the flag set in iOSGoogleLogin(_:).
+          if req.session.data["oauth_login"] == "iOS" {
+            do {
+              // 3 - If the request is from iOS, generate a token for the user.
+              let token = try Token.generate(for: user)
+              // 4 - Save the token, resolve the returned future and return a redirect. This uses the tilapp scheme and returns the token as a query parameter. You’ll use this in the iOS app.
+              redirectURL = token.save(on: req.db).map {
+                "tilapp://auth?token=\(token.value)"
+              }
+            // 5 - Catch any errors thrown by generating the token and return a failed future.
+            } catch {
+              return req.eventLoop.future(error: error)
+            }
+          } else {
+            // 6 - If the request is not from iOS, create a future string for the original redirect URL.
+            redirectURL = req.eventLoop.future("/")
+          }
+          // 7 - Reset the oauth_login flag for the next session.
+          req.session.data["oauth_login"] = nil
+          // 8 - Resolve the future and return a redirect using the returned string.
+          return redirectURL.map { url in
+            req.redirect(to: url)
+          }
+      }
       
       guard let googleCallbackURL =
         Environment.get("GOOGLE_CALLBACK_URL") else {
@@ -26,6 +88,8 @@ struct ImperialController: RouteCollection {
         callback: googleCallbackURL,
         scope: ["profile", "email"],
         completion: processGoogleLogin)
+      routes.get("iOS", "login-google", use: iOSGoogleLogin)
+
   }
     
     
