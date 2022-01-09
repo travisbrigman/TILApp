@@ -1,16 +1,42 @@
 //
-//  File.swift
+//  ImperialController.swift
 //  
 //
 //  Created by Travis Brigman on 12/26/21.
 //
 
 import ImperialGoogle
+import ImperialGitHub
 import Vapor
 import Fluent
 
 struct ImperialController: RouteCollection {
   func boot(routes: RoutesBuilder) throws {
+      guard let googleCallbackURL =
+        Environment.get("GOOGLE_CALLBACK_URL") else {
+          fatalError("Google callback URL not set")
+      }
+      try routes.oAuth(
+        from: Google.self,
+        authenticate: "login-google",
+        callback: googleCallbackURL,
+        scope: ["profile", "email"],
+        completion: processGoogleLogin)
+      routes.get("iOS", "login-google", use: iOSGoogleLogin)
+      
+      guard let githubCallbackURL =
+        Environment.get("GITHUB_CALLBACK_URL") else {
+          fatalError("GitHub callback URL not set")
+      }
+      try routes.oAuth(
+        from: GitHub.self,
+        authenticate: "login-github",
+        callback: githubCallbackURL,
+        completion: processGitHubLogin)
+      
+      routes.get("iOS", "login-github", use: iOSGitHubLogin)
+
+  }
       func processGoogleLogin(request: Request, token: String)
         throws -> EventLoopFuture<ResponseEncodable> {
             // 1 - Get the user information from Google.
@@ -42,11 +68,52 @@ struct ImperialController: RouteCollection {
               }
         }
       
+      func processGitHubLogin(request: Request, token: String)
+        throws -> EventLoopFuture<ResponseEncodable> {
+            // 1
+            return try GitHub
+              .getUser(on: request)
+              .flatMap { userInfo in
+                // 2
+                return User
+                  .query(on: request.db)
+                  .filter(\.$username == userInfo.login)
+                  .first()
+                  .flatMap { foundUser in
+                    guard let existingUser = foundUser else {
+                      // 3
+                      let user = User(
+                        name: userInfo.name,
+                        username: userInfo.login,
+                        password: UUID().uuidString)
+                      // 4
+                      return user
+                        .save(on: request.db)
+                        .flatMap {
+                          // 5
+                          request.session.authenticate(user)
+                          return generateRedirect(on: request, for: user)
+                      }
+                    }
+                    // 6
+                    request.session.authenticate(existingUser)
+                    return generateRedirect(on: request, for: existingUser)
+                }
+            }
+        }
+      
       func iOSGoogleLogin(_ req: Request) -> Response {
         // 1 - Add an entry to the request’s session, noting that this OAuth login attempt came from iOS.
         req.session.data["oauth_login"] = "iOS"
         // 2 - Redirect to the URL you created earlier to start the OAuth flow for logging in to the website using Google.
         return req.redirect(to: "/login-google")
+      }
+      
+      func iOSGitHubLogin(_ req: Request) -> Response {
+        // 1
+        req.session.data["oauth_login"] = "iOS"
+        // 2
+        return req.redirect(to: "/login-github")
       }
       
       // 1 - Define a new method that takes both Request and User to generate a redirect. This new method returns EventLoopFuture<ResponseEncodable>.
@@ -78,19 +145,7 @@ struct ImperialController: RouteCollection {
           }
       }
       
-      guard let googleCallbackURL =
-        Environment.get("GOOGLE_CALLBACK_URL") else {
-          fatalError("Google callback URL not set")
-      }
-      try routes.oAuth(
-        from: Google.self,
-        authenticate: "login-google",
-        callback: googleCallbackURL,
-        scope: ["profile", "email"],
-        completion: processGoogleLogin)
-      routes.get("iOS", "login-google", use: iOSGoogleLogin)
 
-  }
     
     
 }
@@ -129,6 +184,45 @@ extension Google {
         // 7 - Decode the data from the response to GoogleUserInfo and return the result.
         return try response.content
           .decode(GoogleUserInfo.self)
+      }
+  }
+}
+
+struct GitHubUserInfo: Content {
+  let name: String
+  let login: String
+}
+
+extension GitHub {
+  // 1
+  static func getUser(on request: Request)
+    throws -> EventLoopFuture<GitHubUserInfo> {
+      // 2
+      var headers = HTTPHeaders()
+      try headers.add(
+        name: .authorization,
+        value: "token \(request.accessToken())")
+      headers.add(name: .userAgent, value: "vapor")
+
+      // 3
+      let githubUserAPIURL: URI = "https://api.github.com/user"
+      // 4
+      return request
+        .client
+        .get(githubUserAPIURL, headers: headers)
+        .flatMapThrowing { response in
+          // 5
+          guard response.status == .ok else {
+            // 6
+            if response.status == .unauthorized {
+              throw Abort.redirect(to: "/login-github")
+            } else {
+              throw Abort(.internalServerError)
+            }
+          }
+          // 7
+          return try response.content
+            .decode(GitHubUserInfo.self)
       }
   }
 }
