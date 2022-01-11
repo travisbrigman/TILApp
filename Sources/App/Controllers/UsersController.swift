@@ -5,6 +5,8 @@
 //  Created by Travis Brigman on 12/3/21.
 //
 
+import JWT
+import Fluent
 import Vapor
 
 // 1 - Define a new type UsersController that conforms to RouteCollection.
@@ -22,6 +24,8 @@ struct UsersController: RouteCollection {
           ":userID",
           "acronyms",
           use: getAcronymsHandler)
+        
+        usersRoute.post("siwa", use: signInWithApple)
         
         // 1 - Create a protected route group using HTTP basic authentication, as you did for creating an acronym. This doesn’t use GuardAuthenticationMiddleware since req.auth.require(_:) throws the correct error if a user isn’t authenticated.
         let basicAuthMiddleware = User.authenticator()
@@ -88,4 +92,63 @@ struct UsersController: RouteCollection {
       // 4 - Save and return the token.
       return token.save(on: req.db).map { token }
     }
+}
+
+func signInWithApple(_ req: Request)
+  throws -> EventLoopFuture<Token> {
+    // 1
+    let data = try req.content.decode(SignInWithAppleToken.self)
+    // 2
+    guard let appIdentifier =
+      Environment.get("IOS_APPLICATION_IDENTIFIER") else {
+      throw Abort(.internalServerError)
+    }
+    // 3
+    return req.jwt
+      .apple
+      .verify(data.token, applicationIdentifier: appIdentifier)
+      .flatMap { siwaToken -> EventLoopFuture<Token> in
+        // 4
+        User.query(on: req.db)
+          .filter(\.$siwaIdentifier == siwaToken.subject.value)
+          .first()
+          .flatMap { user in
+            let userFuture: EventLoopFuture<User>
+            if let user = user {
+              userFuture = req.eventLoop.future(user)
+            } else {
+              // 5
+              guard
+                let email = siwaToken.email,
+                let name = data.name
+              else {
+                return req.eventLoop
+                  .future(error: Abort(.badRequest))
+              }
+              let user = User(
+                name: name,
+                username: email,
+                password: UUID().uuidString,
+                siwaIdentifier: siwaToken.subject.value)
+              userFuture = user.save(on: req.db).map { user }
+            }
+            // 6
+            return userFuture.flatMap { user in
+              let token: Token
+              do {
+                // 7
+                token = try Token.generate(for: user)
+              } catch {
+                return req.eventLoop.future(error: error)
+              }
+              // 8
+              return token.save(on: req.db).map { token }
+            }
+        }
+    }
+}
+
+struct SignInWithAppleToken: Content {
+  let token: String
+  let name: String?
 }

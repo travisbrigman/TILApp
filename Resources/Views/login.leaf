@@ -42,5 +42,22 @@
   <img class="mt-3" src="/images/sign-in-with-google.png"
    alt="Sign In With Google">
 </a>
+<!-- 1 -->
+<div id="appleid-signin" class="signin-button"
+ data-color="black" data-border="true"
+ data-type="sign in"></div>
+<!-- 2 -->
+<script type="text/javascript"
+ src="https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"></script>
+<!-- 3 -->
+<script type="text/javascript">
+  AppleID.auth.init({
+    clientId : '#(siwaContext.clientID)',
+    scope : '#(siwaContext.scopes)',
+    redirectURI : '#(siwaContext.redirectURI)',
+    state : '#(siwaContext.state)',
+    usePopup : false
+  });
+</script>
   #endexport
 #endextend

@@ -19,6 +19,7 @@ struct CreateUser: Migration {
       .field("name", .string, .required)
       .field("username", .string, .required)
       .field("password", .string, .required)
+      .field("siwaIdentifier", .string)
       .unique(on: "username")
       // 6 - Create the table.
       .create()
