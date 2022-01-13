@@ -125,11 +125,12 @@ func signInWithApple(_ req: Request)
                 return req.eventLoop
                   .future(error: Abort(.badRequest))
               }
-              let user = User(
-                name: name,
-                username: email,
-                password: UUID().uuidString,
-                siwaIdentifier: siwaToken.subject.value)
+                let user = User(
+                  name: name,
+                  username: email,
+                  password: UUID().uuidString,
+                  siwaIdentifier: siwaToken.subject.value,
+                  email: email)
               userFuture = user.save(on: req.db).map { user }
             }
             // 6

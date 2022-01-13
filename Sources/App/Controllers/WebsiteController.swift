@@ -21,6 +21,22 @@ struct WebsiteController: RouteCollection {
             authSessionsRoutes.grouped(User.credentialsAuthenticator())
         credentialsAuthRoutes.post("login", use: loginPostHandler)
         authSessionsRoutes.post("logout", use: logoutHandler)
+        // 1 - Connect a GET request for /register to registerHandler(_:).
+        authSessionsRoutes.get("register", use: registerHandler)
+        // 2 - Connect a POST request for /register to registerPostHandler(_:data:).
+        authSessionsRoutes.post("register", use: registerPostHandler)
+        
+        authSessionsRoutes.post(
+          "login",
+          "siwa",
+          "callback",
+          use: appleAuthCallbackHandler)
+        
+        authSessionsRoutes.post(
+          "login",
+          "siwa",
+          "handle",
+          use: appleAuthRedirectHandler)
         authSessionsRoutes.get(use: indexHandler)
         authSessionsRoutes.get(
             "acronyms",
@@ -58,23 +74,8 @@ struct WebsiteController: RouteCollection {
             ":acronymID",
             "delete",
             use: deleteAcronymHandler)
-        // 1 - Connect a GET request for /register to registerHandler(_:).
-        authSessionsRoutes.get("register", use: registerHandler)
-        // 2 - Connect a POST request for /register to registerPostHandler(_:data:).
-        authSessionsRoutes.post("register", use: registerPostHandler)
-        
-        authSessionsRoutes.post(
-          "login",
-          "siwa",
-          "callback",
-          use: appleAuthCallbackHandler)
-        
-        authSessionsRoutes.post(
-          "login",
-          "siwa",
-          "handle",
-          use: appleAuthRedirectHandler)
     }
+    
 
     // 4 - Implement indexHandler(_:) that returns EventLoopFuture<View>.
     func indexHandler(_ req: Request)
@@ -349,36 +350,20 @@ struct WebsiteController: RouteCollection {
     }
 
     // 1 - Define a route handler for the login page that returns a future View.
-    func loginHandler(_ req: Request){
-    let context: LoginContext
-    // 1
-    let siwaContext = try buildSIWAContext(on: req)
-    if let error = req.query[Bool.self, at: "error"], error {
-      context = LoginContext(
-        loginError: true,
-        siwaContext: siwaContext)
-    } else {
-      context = LoginContext(siwaContext: siwaContext)
-    }
-    // 2
-    return req.view
-      .render("login", context)
-      .encodeResponse(for: req)
-      .map { response in
-        // 3
+    func loginHandler(_ req: Request) throws -> EventLoopFuture<Response> {
+      let context: LoginContext
+      let siwaContext = try buildSIWAContext(on: req)
+      if let error = req.query[Bool.self, at: "error"], error {
+        context = LoginContext(loginError: true, siwaContext: siwaContext)
+      } else {
+        context = LoginContext(siwaContext: siwaContext)
+      }
+      return req.view.render("login", context).encodeResponse(for: req).map { response in
         let expiryDate = Date().addingTimeInterval(300)
-        // 4
-        let cookie = HTTPCookies.Value(
-          string: siwaContext.state,
-          expires: expiryDate,
-          maxAge: 300,
-          isHTTPOnly: true,
-          sameSite: HTTPCookies.SameSitePolicy.none)
-        // 5
+        let cookie = HTTPCookies.Value(string: siwaContext.state, expires: expiryDate, maxAge: 300, isHTTPOnly: true, sameSite: HTTPCookies.SameSitePolicy.none)
         response.cookies["SIWA_STATE"] = cookie
-        // 6
         return response
-    }
+      }
     }
 
     // 1 - Define a route handler that returns EventLoopFuture<Response>.
@@ -467,9 +452,10 @@ func registerHandler(_ req: Request)
         let password = try Bcrypt.hash(data.password)
         // 4 - Create a new User, using the data from the form and the hashed password.
         let user = User(
-            name: data.name,
-            username: data.username,
-            password: password)
+          name: data.name,
+          username: data.username,
+          password: password,
+          email: data.emailAddress)
         // 5 - Save the new user and unwrap the returned future.
         return user.save(on: req.db).map {
             // 6 - Authenticate the session for the new user. This automatically logs users in when they register, thereby providing a nice user experience when signing up with the site.
@@ -477,6 +463,110 @@ func registerHandler(_ req: Request)
             // 7 - Return a redirect back to the home page.
             return req.redirect(to: "/")
         }
+    }
+    
+    func appleAuthCallbackHandler(_ req: Request)
+      throws -> EventLoopFuture<View> {
+        // 1
+        let siwaData =
+          try req.content.decode(AppleAuthorizationResponse.self)
+        // 2
+        guard
+          let sessionState = req.cookies["SIWA_STATE"]?.string,
+          !sessionState.isEmpty,
+          sessionState == siwaData.state
+        else {
+          req.logger
+            .warning("SIWA does not exist or does not match")
+          throw Abort(.unauthorized)
+        }
+        // 3
+        let context = SIWAHandleContext(
+          token: siwaData.idToken,
+          email: siwaData.user?.email,
+          firstName: siwaData.user?.name?.firstName,
+          lastName: siwaData.user?.name?.lastName)
+        // 4
+        return req.view.render("siwaHandler", context)
+    }
+
+    func appleAuthRedirectHandler(_ req: Request)
+      throws -> EventLoopFuture<Response> {
+        // 1
+        let data = try req.content.decode(SIWARedirectData.self)
+        // 2
+        guard let appIdentifier =
+          Environment.get("WEBSITE_APPLICATION_IDENTIFIER") else {
+          throw Abort(.internalServerError)
+        }
+        return req.jwt
+          .apple
+          .verify(data.token, applicationIdentifier: appIdentifier)
+          .flatMap { siwaToken in
+            User.query(on: req.db)
+              .filter(\.$siwaIdentifier == siwaToken.subject.value)
+              .first()
+              .flatMap { user in
+                let userFuture: EventLoopFuture<User>
+                if let user = user {
+                  userFuture = req.eventLoop.future(user)
+                } else {
+                  // 3
+                  guard
+                    let email = data.email,
+                    let firstName = data.firstName,
+                    let lastName = data.lastName
+                  else {
+                    return req.eventLoop
+                      .future(error: Abort(.badRequest))
+                  }
+                  // 4
+                    let user = User(
+                      name: "\(firstName) \(lastName)",
+                      username: email,
+                      password: UUID().uuidString,
+                      siwaIdentifier: siwaToken.subject.value,
+                      email: email)
+                  userFuture = user.save(on: req.db).map { user }
+                }
+                // 5
+                return userFuture.map { user in
+                  // 6
+                  req.auth.login(user)
+                  // 7
+                  return req.redirect(to: "/")
+                }
+            }
+        }
+    }
+
+    private func buildSIWAContext(on req: Request)
+      throws -> SIWAContext {
+      // 1
+      let state = [UInt8].random(count: 32).base64
+      // 2
+      let scopes = "name email"
+      // 3
+      guard let clientID =
+        Environment.get("WEBSITE_APPLICATION_IDENTIFIER") else {
+          req.logger.error("WEBSITE_APPLICATION_IDENTIFIER not set")
+          throw Abort(.internalServerError)
+      }
+      // 4
+      guard let redirectURI =
+        Environment.get("SIWA_REDIRECT_URL") else {
+          req.logger.error("SIWA_REDIRECT_URL not set")
+          throw Abort(.internalServerError)
+      }
+      // 5
+      let siwa = SIWAContext(
+        clientID: clientID,
+        scopes: scopes,
+        redirectURI: redirectURI,
+        state: state)
+      return siwa
+    }
+        
     }
 
 
@@ -570,6 +660,7 @@ struct RegisterData: Content {
     let username: String
     let password: String
     let confirmPassword: String
+    let emailAddress: String
 }
 
 // 1 - Extend RegisterData to make it conform to Validatable. Validatable allows you to validate types with Vapor.
@@ -595,6 +686,7 @@ extension RegisterData: Validatable {
             as: String.self,
             is: .zipCode,
             required: false)
+        validations.add("emailAddress", as: String.self, is: .email)
     }
 }
 
@@ -697,107 +789,6 @@ struct SIWAHandleContext: Encodable {
   let email: String?
   let firstName: String?
   let lastName: String?
-}
-
-func appleAuthCallbackHandler(_ req: Request)
-  throws -> EventLoopFuture<View> {
-    // 1
-    let siwaData =
-      try req.content.decode(AppleAuthorizationResponse.self)
-    // 2
-    guard
-      let sessionState = req.cookies["SIWA_STATE"]?.string,
-      !sessionState.isEmpty,
-      sessionState == siwaData.state
-    else {
-      req.logger
-        .warning("SIWA does not exist or does not match")
-      throw Abort(.unauthorized)
-    }
-    // 3
-    let context = SIWAHandleContext(
-      token: siwaData.idToken,
-      email: siwaData.user?.email,
-      firstName: siwaData.user?.name?.firstName,
-      lastName: siwaData.user?.name?.lastName)
-    // 4
-    return req.view.render("siwaHandler", context)
-}
-
-func appleAuthRedirectHandler(_ req: Request)
-  throws -> EventLoopFuture<Response> {
-    // 1
-    let data = try req.content.decode(SIWARedirectData.self)
-    // 2
-    guard let appIdentifier =
-      Environment.get("WEBSITE_APPLICATION_IDENTIFIER") else {
-      throw Abort(.internalServerError)
-    }
-    return req.jwt
-      .apple
-      .verify(data.token, applicationIdentifier: appIdentifier)
-      .flatMap { siwaToken in
-        User.query(on: req.db)
-          .filter(\.$siwaIdentifier == siwaToken.subject.value)
-          .first()
-          .flatMap { user in
-            let userFuture: EventLoopFuture<User>
-            if let user = user {
-              userFuture = req.eventLoop.future(user)
-            } else {
-              // 3
-              guard
-                let email = data.email,
-                let firstName = data.firstName,
-                let lastName = data.lastName
-              else {
-                return req.eventLoop
-                  .future(error: Abort(.badRequest))
-              }
-              // 4
-              let user = User(
-                name: "\(firstName) \(lastName)",
-                username: email,
-                password: UUID().uuidString,
-                siwaIdentifier: siwaToken.subject.value)
-              userFuture = user.save(on: req.db).map { user }
-            }
-            // 5
-            return userFuture.map { user in
-              // 6
-              req.auth.login(user)
-              // 7
-              return req.redirect(to: "/")
-            }
-        }
-    }
-}
-
-private func buildSIWAContext(on req: Request)
-  throws -> SIWAContext {
-  // 1
-  let state = [UInt8].random(count: 32).base64
-  // 2
-  let scopes = "name email"
-  // 3
-  guard let clientID =
-    Environment.get("WEBSITE_APPLICATION_IDENTIFIER") else {
-      req.logger.error("WEBSITE_APPLICATION_IDENTIFIER not set")
-      throw Abort(.internalServerError)
-  }
-  // 4
-  guard let redirectURI =
-    Environment.get("SIWA_REDIRECT_URL") else {
-      req.logger.error("SIWA_REDIRECT_URL not set")
-      throw Abort(.internalServerError)
-  }
-  // 5
-  let siwa = SIWAContext(
-    clientID: clientID,
-    scopes: scopes,
-    redirectURI: redirectURI,
-    state: state)
-  return siwa
 }
 
 struct SIWARedirectData: Content {

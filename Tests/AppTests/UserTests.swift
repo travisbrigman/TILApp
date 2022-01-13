@@ -44,7 +44,8 @@ final class UserTests: XCTestCase {
         let user = User(
           name: usersName,
           username: usersUsername,
-          password: "password")
+          password: "password",
+          email: "\(usersUsername)@test.com")
 
         // 1 - Set loggedInRequest so the create user request works.
         try app.test(.POST, usersURI, loggedInRequest: true,

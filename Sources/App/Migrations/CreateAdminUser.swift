@@ -21,10 +21,11 @@ struct CreateAdminUser: Migration {
       return database.eventLoop.future(error: error)
     }
     // 4 - Create a new user with the name Admin, username admin and the hashed password.
-    let user = User(
-      name: "Admin",
-      username: "admin",
-      password: passwordHash)
+      let user = User(
+        name: "Admin",
+        username: "admin",
+        password: passwordHash,
+        email: "admin@localhost.local")
     // 5 - Save the user and return.
     return user.save(on: database)
   }

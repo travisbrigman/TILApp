@@ -32,6 +32,7 @@ struct ImperialController: RouteCollection {
         from: GitHub.self,
         authenticate: "login-github",
         callback: githubCallbackURL,
+        scope: ["user:email"],
         completion: processGitHubLogin)
       
       routes.get("iOS", "login-github", use: iOSGitHubLogin)
@@ -51,10 +52,11 @@ struct ImperialController: RouteCollection {
                   .flatMap { foundUser in
                     guard let existingUser = foundUser else {
                       // 3 - If the user doesn’t exist, create a new User using the name and email from the user information from Google. Set the password to a UUID string, since you don’t need it. This ensures that no one can login to this account via a normal password login.
-                      let user = User(
-                        name: userInfo.name,
-                        username: userInfo.email,
-                        password: UUID().uuidString)
+                        let user = User(
+                          name: userInfo.name,
+                          username: userInfo.email,
+                          password: UUID().uuidString,
+                          email: userInfo.email)
                       // 4 - Save the user and unwrap the returned future.
                         return user.save(on: request.db).flatMap {
                           request.session.authenticate(user)
@@ -68,39 +70,35 @@ struct ImperialController: RouteCollection {
               }
         }
       
-      func processGitHubLogin(request: Request, token: String)
-        throws -> EventLoopFuture<ResponseEncodable> {
-            // 1
-            return try GitHub
-              .getUser(on: request)
-              .flatMap { userInfo in
-                // 2
-                return User
-                  .query(on: request.db)
-                  .filter(\.$username == userInfo.login)
-                  .first()
-                  .flatMap { foundUser in
-                    guard let existingUser = foundUser else {
-                      // 3
-                      let user = User(
-                        name: userInfo.name,
-                        username: userInfo.login,
-                        password: UUID().uuidString)
-                      // 4
-                      return user
-                        .save(on: request.db)
-                        .flatMap {
-                          // 5
-                          request.session.authenticate(user)
-                          return generateRedirect(on: request, for: user)
-                      }
-                    }
-                    // 6
-                    request.session.authenticate(existingUser)
-                    return generateRedirect(on: request, for: existingUser)
+    func processGitHubLogin(request: Request, token: String) throws
+      -> EventLoopFuture<ResponseEncodable> {
+        // 1
+        return try GitHub.getUser(on: request)
+          .and(GitHub.getEmails(on: request))
+          .flatMap { userInfo, emailInfo in
+            return User.query(on: request.db)
+              .filter(\.$username == userInfo.login)
+              .first()
+              .flatMap { foundUser in
+                guard let existingUser = foundUser else {
+                  // 2
+                  let user = User(
+                    name: userInfo.name,
+                    username: userInfo.login,
+                    password: UUID().uuidString,
+                    email: emailInfo[0].email)
+                  return user.save(on: request.db).flatMap {
+                    request.session.authenticate(user)
+                    return generateRedirect(on: request, for: user)
+                  }
                 }
+                request.session.authenticate(existingUser)
+                return generateRedirect(
+                  on: request,
+                  for: existingUser)
             }
         }
+    }
       
       func iOSGoogleLogin(_ req: Request) -> Response {
         // 1 - Add an entry to the request’s session, noting that this OAuth login attempt came from iOS.
@@ -193,6 +191,10 @@ struct GitHubUserInfo: Content {
   let login: String
 }
 
+struct GitHubEmailInfo: Content {
+  let email: String
+}
+
 extension GitHub {
   // 1
   static func getUser(on request: Request)
@@ -225,4 +227,35 @@ extension GitHub {
             .decode(GitHubUserInfo.self)
       }
   }
+    
+    // 1
+    static func getEmails(on request: Request) throws
+      -> EventLoopFuture<[GitHubEmailInfo]> {
+        // 2
+        var headers = HTTPHeaders()
+        try headers.add(
+          name: .authorization,
+          value: "token \(request.accessToken())")
+        headers.add(name: .userAgent, value: "vapor")
+
+        // 3
+        let githubUserAPIURL: URI =
+          "https://api.github.com/user/emails"
+        return request.client
+          .get(githubUserAPIURL, headers: headers)
+          .flatMapThrowing { response in
+            // 4
+            guard response.status == .ok else {
+              // 5
+              if response.status == .unauthorized {
+                throw Abort.redirect(to: "/login-github")
+              } else {
+                throw Abort(.internalServerError)
+              }
+            }
+            // 6
+            return try response.content
+              .decode([GitHubEmailInfo].self)
+        }
+    }
 }
