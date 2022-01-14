@@ -2,7 +2,7 @@ import Fluent
 import FluentPostgresDriver
 import Vapor
 import Leaf
-
+import SendGrid
 // configures your application
 public func configure(_ app: Application) throws {
     // uncomment to serve files from /Public folder
@@ -41,6 +41,7 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateAcronymCategoryPivot())
     app.migrations.add(CreateToken())
     app.migrations.add(CreateAdminUser())
+    app.migrations.add(CreateResetPasswordToken())
       
     // 2 - Set the log level for the application to debug. This provides more information and enables you to see your migrations.
     app.logger.logLevel = .debug
@@ -51,4 +52,6 @@ public func configure(_ app: Application) throws {
 
     // register routes
     try routes(app)
+    
+    app.sendgrid.initialize()
 }
