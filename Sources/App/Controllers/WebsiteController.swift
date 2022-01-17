@@ -8,11 +8,13 @@
 import Fluent
 import Foundation
 import Leaf
-import Vapor
 import SendGrid
+import Vapor
 
 // 1 - Declare a new WebsiteController type that conforms to RouteCollection.
 struct WebsiteController: RouteCollection {
+    
+    let imageFolder = "ProfilePictures/"
     // 2 - Implement boot(routes:) as required by RouteCollection.
     func boot(routes: RoutesBuilder) throws {
         let authSessionsRoutes =
@@ -80,18 +82,37 @@ struct WebsiteController: RouteCollection {
             "forgottenPassword",
             use: forgottenPasswordHandler)
         authSessionsRoutes.post(
-          "forgottenPassword",
-          use: forgottenPasswordPostHandler)
-    
-    authSessionsRoutes.get(
-      "resetPassword",
-      use: resetPasswordHandler)
-    
-    authSessionsRoutes.post(
-      "resetPassword",
-      use: resetPasswordPostHandler)
+            "forgottenPassword",
+            use: forgottenPasswordPostHandler)
+
+        authSessionsRoutes.get(
+            "resetPassword",
+            use: resetPasswordHandler)
+
+        authSessionsRoutes.post(
+            "resetPassword",
+            use: resetPasswordPostHandler)
+
+        protectedRoutes.get(
+            "users",
+            ":userID",
+            "addProfilePicture",
+            use: addProfilePictureHandler)
+        
+        protectedRoutes.on(
+          .POST,
+          "users",
+          ":userID",
+          "addProfilePicture",
+          body: .collect(maxSize: "10mb"),
+          use: addProfilePicturePostHandler)
+        
+        authSessionsRoutes.get(
+          "users",
+          ":userID",
+          "profilePicture",
+          use: getUsersProfilePictureHandler)
     }
-    
 
     // 4 - Implement indexHandler(_:) that returns EventLoopFuture<View>.
     func indexHandler(_ req: Request)
@@ -151,10 +172,14 @@ struct WebsiteController: RouteCollection {
                 // 3 - Get the user’s acronyms using the @Children property wrapper’s project value and unwrap the future.
                 user.$acronyms.get(on: req.db).flatMap { acronyms in
                     // 4 - Create a UserContext, then render user.leaf, returning the result. In this case, you’re not setting the acronyms array to nil if it’s empty. This is not required as you’re checking the count in template.
+                    // 1
+                    let loggedInUser = req.auth.get(User.self)
+                    // 2
                     let context = UserContext(
-                        title: user.name,
-                        user: user,
-                        acronyms: acronyms)
+                      title: user.name,
+                      user: user,
+                      acronyms: acronyms,
+                      authenticatedUser: loggedInUser)
                     return req.view.render("user", context)
                 }
             }
@@ -603,107 +628,172 @@ struct WebsiteController: RouteCollection {
 
     // 1
     func forgottenPasswordPostHandler(_ req: Request) throws -> EventLoopFuture<View> {
-      let email = try req.content.get(String.self, at: "email")
-      return User.query(on: req.db).filter(\.$email == email).first().flatMap { user in
-        guard let user = user else {
-          return req.view.render("forgottenPasswordConfirmed", ["title": "Password Reset Email Sent"])
+        let email = try req.content.get(String.self, at: "email")
+        return User.query(on: req.db).filter(\.$email == email).first().flatMap { user in
+            guard let user = user else {
+                return req.view.render("forgottenPasswordConfirmed", ["title": "Password Reset Email Sent"])
+            }
+            let resetTokenString = Data([UInt8].random(count: 32)).base32EncodedString()
+            let resetToken: ResetPasswordToken
+            do {
+                resetToken = try ResetPasswordToken(token: resetTokenString, userID: user.requireID())
+            } catch {
+                return req.eventLoop.future(error: error)
+            }
+            return resetToken.save(on: req.db).flatMap {
+                let emailContent = """
+                <p>You've requested to reset your password. <a
+                href="http://localhost:8080/resetPassword?token=\(resetTokenString)">
+                Click here</a> to reset your password.</p>
+                """
+                let emailAddress = EmailAddress(email: user.email, name: user.name)
+                let fromEmail = EmailAddress(email: "travis1000@icloud.com", name: "Vapor TIL")
+                let emailConfig = Personalization(to: [emailAddress], subject: "Reset Your Password")
+                let email = SendGridEmail(
+                    personalizations: [emailConfig],
+                    from: fromEmail,
+                    content: [["type": "text/html", "value": emailContent]])
+                let emailSend: EventLoopFuture<Void>
+                do {
+                    emailSend = try req.application.sendgrid.client.send(email: email, on: req.eventLoop)
+                } catch {
+                    return req.eventLoop.future(error: error)
+                }
+                return emailSend.flatMap {
+                    req.view.render("forgottenPasswordConfirmed", ["title": "Password Reset Email Sent"])
+                }
+            }
         }
-        let resetTokenString = Data([UInt8].random(count: 32)).base32EncodedString()
-        let resetToken: ResetPasswordToken
-        do {
-          resetToken = try ResetPasswordToken(token: resetTokenString, userID: user.requireID())
-        } catch {
-          return req.eventLoop.future(error: error)
-        }
-        return resetToken.save(on: req.db).flatMap {
-          let emailContent = """
-          <p>You've requested to reset your password. <a
-          href="http://localhost:8080/resetPassword?token=\(resetTokenString)">
-          Click here</a> to reset your password.</p>
-          """
-          let emailAddress = EmailAddress(email: user.email, name: user.name)
-          let fromEmail = EmailAddress(email: "travis1000@icloud.com", name: "Vapor TIL")
-          let emailConfig = Personalization(to: [emailAddress], subject: "Reset Your Password")
-          let email = SendGridEmail(
-            personalizations: [emailConfig],
-            from: fromEmail,
-            content: [["type": "text/html", "value": emailContent]])
-          let emailSend: EventLoopFuture<Void>
-          do {
-            emailSend = try req.application.sendgrid.client.send(email: email, on: req.eventLoop)
-          } catch {
-            return req.eventLoop.future(error: error)
-          }
-          return emailSend.flatMap {
-            req.view.render("forgottenPasswordConfirmed", ["title": "Password Reset Email Sent"])
-          }
-        }
-      }
     }
-    
+
     func resetPasswordHandler(_ req: Request)
-      -> EventLoopFuture<View> {
+        -> EventLoopFuture<View>
+    {
         // 1
         guard let token =
-          try? req.query.get(String.self, at: "token") else {
+            try? req.query.get(String.self, at: "token")
+        else {
             return req.view.render(
-              "resetPassword",
-              ResetPasswordContext(error: true)
-            )
+                "resetPassword",
+                ResetPasswordContext(error: true))
         }
         // 2
         return ResetPasswordToken.query(on: req.db)
-          .filter(\.$token == token)
-          .first()
-          // 3
-          .unwrap(or: Abort.redirect(to: "/"))
-          .flatMap { token in
-            // 4
-            token.$user.get(on: req.db).flatMap { user in
-              do {
-                try req.session.set("ResetPasswordUser", to: user)
-              } catch {
-                return req.eventLoop.future(error: error)
-              }
-              // 5
-              return token.delete(on: req.db)
+            .filter(\.$token == token)
+            .first()
+            // 3
+            .unwrap(or: Abort.redirect(to: "/"))
+            .flatMap { token in
+                // 4
+                token.$user.get(on: req.db).flatMap { user in
+                    do {
+                        try req.session.set("ResetPasswordUser", to: user)
+                    } catch {
+                        return req.eventLoop.future(error: error)
+                    }
+                    // 5
+                    return token.delete(on: req.db)
+                }
+            }.flatMap {
+                // 6
+                req.view.render(
+                    "resetPassword",
+                    ResetPasswordContext())
             }
-          }.flatMap {
-            // 6
-            req.view.render(
-              "resetPassword",
-              ResetPasswordContext()
-            )
-          }
     }
-    
+
     func resetPasswordPostHandler(_ req: Request)
-      throws -> EventLoopFuture<Response> {
+        throws -> EventLoopFuture<Response>
+    {
         // 1
         let data = try req.content.decode(ResetPasswordData.self)
         // 2
         guard data.password == data.confirmPassword else {
-          return req.view.render(
-            "resetPassword",
-            ResetPasswordContext(error: true))
-            .encodeResponse(for: req)
+            return req.view.render(
+                "resetPassword",
+                ResetPasswordContext(error: true))
+                .encodeResponse(for: req)
         }
         // 3
         let resetPasswordUser = try req.session
-          .get("ResetPasswordUser", as: User.self)
+            .get("ResetPasswordUser", as: User.self)
         req.session.data["ResetPasswordUser"] = nil
         // 4
         let newPassword = try Bcrypt.hash(data.password)
         // 5
         return try User.query(on: req.db)
-          .filter(\.$id == resetPasswordUser.requireID())
-          .set(\.$password, to: newPassword)
-          .update()
-          .transform(to: req.redirect(to: "/login"))
+            .filter(\.$id == resetPasswordUser.requireID())
+            .set(\.$password, to: newPassword)
+            .update()
+            .transform(to: req.redirect(to: "/login"))
     }
 
-}
+    func addProfilePictureHandler(_ req: Request)
+        -> EventLoopFuture<View>
+    {
+        User.find(req.parameters.get("userID"), on: req.db)
+            .unwrap(or: Abort(.notFound)).flatMap { user in
+                req.view.render(
+                    "addProfilePicture",
+                    [
+                        "title": "Add Profile Picture",
+                        "username": user.name
+                    ])
+            }
+    }
     
+    func addProfilePicturePostHandler(_ req: Request)
+      throws -> EventLoopFuture<Response> {
+        // 1
+        let data = try req.content.decode(ImageUploadData.self)
+        // 2
+        return User.find(req.parameters.get("userID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+          .flatMap { user in
+            // 3
+            let userID: UUID
+            do {
+              userID = try user.requireID()
+            } catch {
+              return req.eventLoop.future(error: error)
+            }
+            // 4
+            let name = "\(userID)-\(UUID()).jpg"
+            // 5
+            let path =
+              req.application.directory.workingDirectory +
+                imageFolder + name
+            // 6
+            return req.fileio
+              .writeFile(.init(data: data.picture), at: path)
+              .flatMap {
+                // 7
+                user.profilePicture = name
+                // 8
+                let redirect = req.redirect(to: "/users/\(userID)")
+                return user.save(on: req.db).transform(to: redirect)
+            }
+        }
+    }
+    
+    func getUsersProfilePictureHandler(_ req: Request)
+      -> EventLoopFuture<Response> {
+        // 1
+        User.find(req.parameters.get("userID"), on: req.db)
+          .unwrap(or: Abort(.notFound))
+          .flatMapThrowing { user in
+          // 2
+          guard let filename = user.profilePicture else {
+            throw Abort(.notFound)
+          }
+          // 3
+          let path = req.application.directory
+            .workingDirectory + imageFolder + filename
+          // 4
+          return req.fileio.streamFile(at: path)
+        }
+    }
+}
 
 struct IndexContext: Encodable {
     let title: String
@@ -723,6 +813,7 @@ struct UserContext: Encodable {
     let title: String
     let user: User
     let acronyms: [Acronym]
+    let authenticatedUser: User?
 }
 
 struct AllUsersContext: Encodable {
@@ -943,15 +1034,19 @@ struct SIWAContext: Encodable {
 }
 
 struct ResetPasswordContext: Encodable {
-  let title = "Reset Password"
-  let error: Bool?
+    let title = "Reset Password"
+    let error: Bool?
 
-  init(error: Bool? = false) {
-    self.error = error
-  }
+    init(error: Bool? = false) {
+        self.error = error
+    }
 }
 
 struct ResetPasswordData: Content {
-  let password: String
-  let confirmPassword: String
+    let password: String
+    let confirmPassword: String
+}
+
+struct ImageUploadData: Content {
+  var picture: Data
 }

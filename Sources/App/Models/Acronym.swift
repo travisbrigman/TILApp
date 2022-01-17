@@ -11,22 +11,23 @@ import Vapor
 // 1 - Define a class that conforms to Model
 final class Acronym: Model {
     // 2 - Specify the schema as required by Model. This is the name of the table in the database.
-    static let schema = "acronyms"
+    static let schema = Acronym.v20210114.schemaName
   
     // 3 - Define an optional id property that stores the ID of the model, if one has been set. This is annotated with Fluent’s @ID property wrapper. This tells Fluent what to use to look up the model in the database.
     @ID
     var id: UUID?
   
     // 4 - Define two String properties to hold the acronym and its definition. These use the @Field property wrapper to denote a generic database field. The key parameter is the name of the column in the database.
-    @Field(key: "short")
+    @Field(key: Acronym.v20210114.short)
     var short: String
-  
-    @Field(key: "long")
+
+    @Field(key: Acronym.v20210114.long)
     var long: String
+
+    @Parent(key: Acronym.v20210114.userID)
+    var user: User
     
     // @Parent is another special Fluent property wrapper. It tells Fluent that this property represents the parent of a parent-child relationship. Fluent uses this to query the database. @Parent also allows you to create an Acronym using only the ID of a User, without needing a full User object. This helps avoid additional database queries.
-    @Parent(key: "userID")
-    var user: User
     
     @Siblings(
       through: AcronymCategoryPivot.self,
