@@ -28,9 +28,7 @@ struct CreateAcronym: Migration {
     }
 
     // 7 - Implement revert(on:) as required by Migration. You call this function when you revert your migrations. This deletes the table referenced with schema(_:).
-    func revert(on database: Database) -> EventLoopFuture<Void> {
-        database.schema("acronyms").delete()
-    }
+
 }
 
 extension Acronym {

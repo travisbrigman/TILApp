@@ -10,7 +10,11 @@
 #endif
     <h1>#(user.name)</h1>
     <!-- 4 -->
-    <h2>#(user.username)</h2>
+    <h2>#(user.username)
+      #if(user.twitterURL):
+      - @#(user.twitterURL)
+      #endif
+    </h2>
     #if(authenticatedUser):
   <a href="/users/#(user.id)/addProfilePicture">
     #if(user.profilePicture):

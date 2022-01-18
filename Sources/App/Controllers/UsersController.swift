@@ -39,6 +39,12 @@ struct UsersController: RouteCollection {
           tokenAuthMiddleware,
           guardAuthMiddleware)
         tokenAuthGroup.post(use: createHandler)
+        
+        // API Version 2 Routes
+        // 1
+        let usersV2Route = routes.grouped("api", "v2", "users")
+        // 2
+        usersV2Route.get(":userID", use: getV2Handler)
     }
 
     // 5 - Define the route handler function.
@@ -67,6 +73,15 @@ struct UsersController: RouteCollection {
         // 4 - Return the user specified by the request’s parameter named userID.
         User.find(req.parameters.get("userID"), on: req.db)
             .unwrap(or: Abort(.notFound)).convertToPublic()
+    }
+    
+    // 1
+    func getV2Handler(_ req: Request)
+        -> EventLoopFuture<User.PublicV2> {
+      // 2
+      User.find(req.parameters.get("userID"), on: req.db)
+        .unwrap(or: Abort(.notFound))
+        .convertToPublicV2()
     }
 
     // 1 - Define a new route handler, getAcronymsHandler(_:), that returns EventLoopFuture<[Acronym]>.

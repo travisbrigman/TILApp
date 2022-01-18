@@ -69,6 +69,23 @@ final class User: Model, Content {
             self.username = username
         }
     }
+    
+    final class PublicV2: Content {
+      var id: UUID?
+      var name: String
+      var username: String
+      var twitterURL: String?
+
+      init(id: UUID?,
+           name: String,
+           username: String,
+           twitterURL: String? = nil) {
+        self.id = id
+        self.name = name
+        self.username = username
+        self.twitterURL = twitterURL
+      }
+    }
 }
 
 extension User {
@@ -76,6 +93,14 @@ extension User {
     func convertToPublic() -> User.Public {
         // 2 - Create a public version of the current object.
         return User.Public(id: id, name: name, username: username)
+    }
+    
+    func convertToPublicV2() -> User.PublicV2 {
+      return User.PublicV2(
+          id: id,
+          name: name,
+          username: username,
+          twitterURL: twitterURL)
     }
 }
 
@@ -89,6 +114,11 @@ extension EventLoopFuture where Value: User {
             user.convertToPublic()
         }
     }
+    func convertToPublicV2() -> EventLoopFuture<User.PublicV2> {
+      return self.map { user in
+        return user.convertToPublicV2()
+      }
+    }
 }
 
 // 5 - Define an extension for [User].
@@ -98,6 +128,9 @@ extension Collection where Element: User {
         // 7 - Convert all the User objects in the array to User.Public.
         return map { $0.convertToPublic() }
     }
+    func convertToPublicV2() -> [User.PublicV2] {
+      return self.map { $0.convertToPublicV2() }
+    }
 }
 
 // 8 - Define an extension for EventLoopFuture<[User]>.
@@ -106,6 +139,10 @@ extension EventLoopFuture where Value == [User] {
     func convertToPublic() -> EventLoopFuture<[User.Public]> {
         // 10 - Unwrap the array contained in the future and use the previous extension to convert all the Users to User.Public.
         return map { $0.convertToPublic() }
+    }
+    
+    func convertToPublicV2() -> EventLoopFuture<[User.PublicV2]> {
+      return self.map { $0.convertToPublicV2() }
     }
 }
 

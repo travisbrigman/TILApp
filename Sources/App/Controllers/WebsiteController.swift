@@ -494,11 +494,17 @@ struct WebsiteController: RouteCollection {
         // 3 - Hash the password submitted to the form.
         let password = try Bcrypt.hash(data.password)
         // 4 - Create a new User, using the data from the form and the hashed password.
+        var twitterURL: String?
+        if let twitter = data.twitterURL,
+           !twitter.isEmpty {
+            twitterURL = twitter
+        }
         let user = User(
-            name: data.name,
-            username: data.username,
-            password: password,
-            email: data.emailAddress)
+          name: data.name,
+          username: data.username,
+          password: password,
+          twitterURL: twitterURL,
+          email: data.emailAddress)
         // 5 - Save the new user and unwrap the returned future.
         return user.save(on: req.db).map {
             // 6 - Authenticate the session for the new user. This automatically logs users in when they register, thereby providing a nice user experience when signing up with the site.
@@ -887,6 +893,7 @@ struct RegisterData: Content {
     let password: String
     let confirmPassword: String
     let emailAddress: String
+    let twitterURL: String?
 }
 
 // 1 - Extend RegisterData to make it conform to Validatable. Validatable allows you to validate types with Vapor.

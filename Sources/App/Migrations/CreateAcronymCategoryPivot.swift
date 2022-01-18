@@ -35,3 +35,12 @@ struct CreateAcronymCategoryPivot: Migration {
         database.schema("acronym-category-pivot").delete()
     }
 }
+
+extension AcronymCategoryPivot {
+  enum v20210113 {
+    static let schemaName = "acronym-category-pivot"
+    static let id = FieldKey(stringLiteral: "id")
+    static let acronymID = FieldKey(stringLiteral: "acronymID")
+    static let categoryID = FieldKey(stringLiteral: "categoryID")
+  }
+}

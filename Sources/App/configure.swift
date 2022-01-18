@@ -1,39 +1,39 @@
 import Fluent
 import FluentPostgresDriver
-import Vapor
 import Leaf
 import SendGrid
+import Vapor
 // configures your application
 public func configure(_ app: Application) throws {
     // uncomment to serve files from /Public folder
-     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
     app.middleware.use(app.sessions.middleware)
     let databaseName: String
     let databasePort: Int
     // 1
-    if (app.environment == .testing) {
-      databaseName = "vapor-test"
-      if let testPort = Environment.get("DATABASE_PORT") {
-        databasePort = Int(testPort) ?? 5433
-      } else {
-        databasePort = 5433
-      }
-    } else {
-          databaseName = "vapor_database"
-          databasePort = 5432
+    if app.environment == .testing {
+        databaseName = "vapor-test"
+        if let testPort = Environment.get("DATABASE_PORT") {
+            databasePort = Int(testPort) ?? 5433
+        } else {
+            databasePort = 5433
         }
+    } else {
+        databaseName = "vapor_database"
+        databasePort = 5432
+    }
     app.databases.use(.postgres(
-      hostname: Environment.get("DATABASE_HOST")
-        ?? "localhost",
-      port: databasePort,
-      username: Environment.get("DATABASE_USERNAME")
-        ?? "vapor_username",
-      password: Environment.get("DATABASE_PASSWORD")
-        ?? "vapor_password",
-      database: Environment.get("DATABASE_NAME")
-        ?? databaseName
+        hostname: Environment.get("DATABASE_HOST")
+            ?? "localhost",
+        port: databasePort,
+        username: Environment.get("DATABASE_USERNAME")
+            ?? "vapor_username",
+        password: Environment.get("DATABASE_PASSWORD")
+            ?? "vapor_password",
+        database: Environment.get("DATABASE_NAME")
+            ?? databaseName
     ), as: .psql)
-    
+
     app.migrations.add(CreateUser())
     // 1 - Add CreateAcronym to the list of migrations to run.
     app.migrations.add(CreateAcronym())
@@ -41,9 +41,15 @@ public func configure(_ app: Application) throws {
     app.migrations.add(CreateAcronymCategoryPivot())
     app.migrations.add(CreateToken())
     app.migrations.add(AddTwitterURLToUser())
-    app.migrations.add(CreateAdminUser())
+    switch app.environment {
+    case .development, .testing:
+        app.migrations.add(CreateAdminUser())
+    default:
+        break
+    }
+    app.migrations.add(MakeCategoriesUnique())
     app.migrations.add(CreateResetPasswordToken())
-      
+
     // 2 - Set the log level for the application to debug. This provides more information and enables you to see your migrations.
     app.logger.logLevel = .debug
 
@@ -53,6 +59,6 @@ public func configure(_ app: Application) throws {
 
     // register routes
     try routes(app)
-    
+
     app.sendgrid.initialize()
 }
